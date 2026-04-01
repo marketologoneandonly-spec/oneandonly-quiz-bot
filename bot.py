@@ -13,7 +13,7 @@ BOT_TOKEN = "8645459843:AAHPX3bqbSDMDiR17in1r2yjhvS90JmLOcs"
 PROMO_CODE = "QUIZ20"
 SITE_URL = "https://oneandonly-perfumer.com/"
 TG_CHANNEL = "https://t.me/oneandonly_perfumer"
-VIDEO_URL = "https://oneandonly-perfumer.com/"  # видео на главной
+VIDEO_URL = "https://oneandonly-perfumer.com/"
 
 # ==================== КАТАЛОГ АРОМАТОВ ====================
 PERFUMES = {
@@ -224,14 +224,23 @@ NOTES_MAP = {
     "leather_tobacco": ["obsidian", "drakonis", "terranex"],
 }
 
-# Маппинг важности → тег
-IMPORTANCE_MAP = {
-    "durability": "durability",
-    "attractiveness": "attractiveness",
-    "status": "status",
-    "compliments": "compliments",
-    "quality": "quality",
-    "universal": "universal",
+# Варианты для вопроса 3
+IMPORTANCE_OPTIONS = {
+    "durability": "⏱ Стойкость",
+    "attractiveness": "💋 Привлекательность",
+    "status": "👑 Статус и впечатление",
+    "compliments": "💬 Комплименты",
+    "quality": "💰 Цена и качество",
+    "universal": "🔄 Универсальность",
+}
+
+# Варианты для вопроса 4
+NOTES_OPTIONS = {
+    "spicy": "🌶 Пряные",
+    "citrus": "🍋 Свежие и цитрусовые",
+    "oriental": "🌙 Восточные и сладкие",
+    "woody": "🌲 Древесные",
+    "leather_tobacco": "🖤 Кожаные и табачные",
 }
 
 
@@ -252,7 +261,6 @@ dp = Dispatcher(storage=storage)
 
 # ==================== ХЕЛПЕРЫ ====================
 def make_kb(buttons: list[tuple[str, str]], row_width: int = 2) -> InlineKeyboardMarkup:
-    """Создаёт инлайн-клавиатуру из списка (текст, callback_data)"""
     keyboard = []
     row = []
     for text, data in buttons:
@@ -265,18 +273,48 @@ def make_kb(buttons: list[tuple[str, str]], row_width: int = 2) -> InlineKeyboar
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_recommendations(note: str, importance: str, count: int = 2) -> list[dict]:
-    """Подбирает ароматы по нотам и важности"""
-    candidates = NOTES_MAP.get(note, [])
-    perfume_list = [PERFUMES[pid] | {"id": pid} for pid in candidates]
+def make_multiselect_kb(
+    options: dict[str, str],
+    selected: set,
+    prefix: str,
+) -> InlineKeyboardMarkup:
+    """Создаёт клавиатуру с мультивыбором (✅ для выбранных)"""
+    keyboard = []
+    for key, label in options.items():
+        check = "✅ " if key in selected else ""
+        keyboard.append(
+            [InlineKeyboardButton(text=f"{check}{label}", callback_data=f"{prefix}_{key}")]
+        )
+    # Кнопка "Готово" — появляется только если выбран хотя бы 1 вариант
+    if selected:
+        keyboard.append(
+            [InlineKeyboardButton(text="➡️ Готово", callback_data=f"{prefix}_done")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    # Сортируем: сначала по совпадению тега важности, потом по стойкости
+
+def get_recommendations(
+    selected_notes: list[str],
+    selected_importance: list[str],
+    count: int = 3,
+) -> list[dict]:
+    """Подбирает ароматы по нескольким нотам и приоритетам"""
+    # Собираем всех кандидатов из выбранных нот
+    seen = set()
+    candidates = []
+    for note in selected_notes:
+        for pid in NOTES_MAP.get(note, []):
+            if pid not in seen:
+                seen.add(pid)
+                candidates.append(PERFUMES[pid] | {"id": pid})
+
+    # Скоринг: количество совпадений по тегам важности + стойкость
     def score(p):
-        tag_match = 1 if importance in p.get("tags", []) else 0
-        return (tag_match, p["hours"])
+        tag_matches = sum(1 for imp in selected_importance if imp in p.get("tags", []))
+        return (tag_matches, p["hours"])
 
-    perfume_list.sort(key=score, reverse=True)
-    return perfume_list[:count]
+    candidates.sort(key=score, reverse=True)
+    return candidates[:count]
 
 
 # ==================== ОБРАБОТЧИКИ ====================
@@ -288,15 +326,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Ответь на 4 вопроса — и получи персональную подборку + промокод на скидку 20% 🎁\n\n"
         "Поехали?"
     )
-    kb = make_kb([
-        ("🚀 Начать подбор", "start_quiz"),
-    ], row_width=1)
+    kb = make_kb([("🚀 Начать подбор", "start_quiz")], row_width=1)
     await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "start_quiz")
 async def start_quiz(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    await state.clear()
     kb = make_kb([
         ("👨 Мужчина", "gender_male"),
         ("👩 Девушка", "gender_female"),
@@ -333,21 +370,13 @@ async def process_gender(callback: types.CallbackQuery, state: FSMContext):
 async def process_age(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     age = callback.data.replace("age_", "")
-    await state.update_data(age=age)
+    await state.update_data(age=age, selected_importance=set())
 
-    kb = make_kb(
-        [
-            ("⏱ Стойкость", "imp_durability"),
-            ("💋 Привлекательность", "imp_attractiveness"),
-            ("👑 Статус и впечатление", "imp_status"),
-            ("💬 Комплименты", "imp_compliments"),
-            ("💰 Цена и качество", "imp_quality"),
-            ("🔄 Универсальность", "imp_universal"),
-        ],
-        row_width=1,
-    )
+    kb = make_multiselect_kb(IMPORTANCE_OPTIONS, set(), "imp")
     await callback.message.edit_text(
-        "❓ *Вопрос 3 из 4*\n\nЧто для вас важно при покупке парфюма?",
+        "❓ *Вопрос 3 из 4*\n\n"
+        "Что для вас важно при покупке парфюма?\n"
+        "_Можно выбрать несколько вариантов_",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -356,62 +385,101 @@ async def process_age(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(QuizStates.importance, F.data.startswith("imp_"))
 async def process_importance(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    importance = callback.data.replace("imp_", "")
-    await state.update_data(importance=importance)
+    action = callback.data.replace("imp_", "")
+    data = await state.get_data()
 
-    kb = make_kb(
-        [
-            ("🌶 Пряные", "note_spicy"),
-            ("🍋 Свежие и цитрусовые", "note_citrus"),
-            ("🌙 Восточные и сладкие", "note_oriental"),
-            ("🌲 Древесные", "note_woody"),
-            ("🖤 Кожаные и табачные", "note_leather_tobacco"),
-        ],
-        row_width=1,
-    )
-    await callback.message.edit_text(
-        "❓ *Вопрос 4 из 4*\n\nКакие ноты вам нравятся?",
-        reply_markup=kb,
-        parse_mode="Markdown",
-    )
-    await state.set_state(QuizStates.notes)
+    # Конвертируем из списка в set (на случай если из JSON)
+    selected = set(data.get("selected_importance", []))
+
+    if action == "done":
+        if not selected:
+            await callback.answer("Выберите хотя бы один вариант", show_alert=True)
+            return
+        await callback.answer()
+        # Переходим к вопросу 4
+        await state.update_data(
+            selected_importance=list(selected),
+            selected_notes=set(),
+        )
+        kb = make_multiselect_kb(NOTES_OPTIONS, set(), "note")
+        await callback.message.edit_text(
+            "❓ *Вопрос 4 из 4*\n\n"
+            "Какие ноты вам нравятся?\n"
+            "_Можно выбрать несколько вариантов_",
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        await state.set_state(QuizStates.notes)
+        return
+
+    # Тогл выбора
+    await callback.answer()
+    if action in selected:
+        selected.discard(action)
+    else:
+        selected.add(action)
+
+    await state.update_data(selected_importance=list(selected))
+    kb = make_multiselect_kb(IMPORTANCE_OPTIONS, selected, "imp")
+    await callback.message.edit_reply_markup(reply_markup=kb)
 
 
 @dp.callback_query(QuizStates.notes, F.data.startswith("note_"))
 async def process_notes(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    note = callback.data.replace("note_", "")
+    action = callback.data.replace("note_", "")
     data = await state.get_data()
-    importance = data.get("importance", "durability")
 
-    recs = get_recommendations(note, importance, count=2)
+    selected = set(data.get("selected_notes", []))
 
-    # Формируем результат
-    result_text = "🎉 *Ваша персональная подборка готова!*\n\n"
+    if action == "done":
+        if not selected:
+            await callback.answer("Выберите хотя бы один вариант", show_alert=True)
+            return
+        await callback.answer()
 
-    for i, perfume in enumerate(recs, 1):
-        result_text += f"*{i}.* {perfume['desc']}\n\n"
+        # Получаем результаты
+        importance_list = data.get("selected_importance", [])
+        notes_list = list(selected)
 
-    result_text += "━━━━━━━━━━━━━━━\n\n"
-    result_text += f"🎁 *Ваш промокод на скидку 20%:* `{PROMO_CODE}`\n"
-    result_text += "⏰ Действует 24 часа!\n\n"
+        recs = get_recommendations(notes_list, importance_list, count=3)
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Перейти в каталог", url=SITE_URL)],
-            [InlineKeyboardButton(text="📺 Как пользоваться сайтом", url=VIDEO_URL)],
-            [InlineKeyboardButton(text="📱 Наш Telegram-канал", url=TG_CHANNEL)],
-            [InlineKeyboardButton(text="🔄 Пройти заново", callback_data="start_quiz")],
-        ]
-    )
+        # Формируем результат
+        result_text = "🎉 *Ваша персональная подборка готова!*\n\n"
 
-    await callback.message.edit_text(
-        result_text,
-        reply_markup=kb,
-        parse_mode="Markdown",
-    )
-    await state.clear()
+        for i, perfume in enumerate(recs, 1):
+            result_text += f"*{i}.* {perfume['desc']}\n\n"
+
+        result_text += "━━━━━━━━━━━━━━━\n\n"
+        result_text += f"🎁 *Ваш промокод на скидку 20%:* `{PROMO_CODE}`\n"
+        result_text += "⏰ Действует 24 часа!\n\n"
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🛒 Перейти в каталог", url=SITE_URL)],
+                [InlineKeyboardButton(text="📺 Как пользоваться сайтом", url=VIDEO_URL)],
+                [InlineKeyboardButton(text="📱 Наш Telegram-канал", url=TG_CHANNEL)],
+                [InlineKeyboardButton(text="🔄 Пройти заново", callback_data="start_quiz")],
+            ]
+        )
+
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        await state.clear()
+        return
+
+    # Тогл выбора
+    await callback.answer()
+    if action in selected:
+        selected.discard(action)
+    else:
+        selected.add(action)
+
+    await state.update_data(selected_notes=list(selected))
+    kb = make_multiselect_kb(NOTES_OPTIONS, selected, "note")
+    await callback.message.edit_reply_markup(reply_markup=kb)
 
 
 # ==================== ЗАПУСК ====================
