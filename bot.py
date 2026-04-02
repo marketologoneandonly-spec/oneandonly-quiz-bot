@@ -8,18 +8,22 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, FSInputFile
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = "8645459843:AAHPX3bqbSDMDiR17in1r2yjhvS90JmLOcs"
 
 PROMO_CODE = "QUIZ20"
-SITE_URL = "https://oneandonly-perfumer.com/"
+CATALOG_URL = "https://oneandonly-perfumer.com/catalog?utm_source=tg&utm_medium=bot&utm_campaign=open"
+HOW_TO_URL = "https://oneandonly-perfumer.com/?utm_source=tg&utm_medium=bot&utm_campaign=open2"
 TG_CHANNEL = "https://t.me/oneandonly_perfumer"
-VIDEO_URL = "https://oneandonly-perfumer.com/"
 
-ADMIN_ID = 77429602  # Только ты можешь делать рассылку
-USERS_FILE = "users.json"  # Файл с базой пользователей
+ADMIN_ID = 77429602
+USERS_FILE = "users.json"
+
+# Папка с фото отзывов
+REVIEWS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reviews")
+
 
 # ==================== БАЗА ПОЛЬЗОВАТЕЛЕЙ ====================
 def load_users() -> dict:
@@ -50,6 +54,76 @@ def save_user(user: types.User, quiz_data: dict):
         "quiz_count": users.get(uid, {}).get("quiz_count", 0) + 1,
     }
     save_users(users)
+
+
+# ==================== FOLLOW-UP ЦЕПОЧКА ====================
+async def send_followup_chain(user_id: int):
+    """Отправляет цепочку сообщений: 30 мин, 6 часов, 12 часов"""
+
+    # --- Через 30 минут ---
+    await asyncio.sleep(30 * 60)
+    try:
+        await bot.send_message(
+            user_id,
+            "👋 У меня есть закрытый уникальный канал про парфюм, "
+            "на котором я рассказываю о новинках, делюсь уникальными дропами, "
+            "даю скидки и запускаю розыгрыши на парфюм.\n\n"
+            "Обязательно подпишись на него 👇",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Подписаться на канал", url=TG_CHANNEL)],
+            ]),
+        )
+        logging.info(f"Follow-up 30min sent to {user_id}")
+    except Exception as e:
+        logging.warning(f"Follow-up 30min failed for {user_id}: {e}")
+
+    # --- Через 6 часов (5.5 часов после первого) ---
+    await asyncio.sleep(5 * 60 * 60 + 30 * 60)
+    try:
+        text_6h = (
+            "⭐ У моей линейки парфюмов более 1000 реальных отзывов "
+            "довольных клиентов!\n\nВот некоторые из них 👇"
+        )
+
+        # Собираем фото из папки reviews
+        review_files = sorted([
+            os.path.join(REVIEWS_DIR, f)
+            for f in os.listdir(REVIEWS_DIR)
+            if f.endswith((".png", ".jpg", ".jpeg"))
+        ]) if os.path.exists(REVIEWS_DIR) else []
+
+        if review_files:
+            # Telegram позволяет до 10 фото в альбоме
+            media = []
+            for i, filepath in enumerate(review_files[:10]):
+                photo = FSInputFile(filepath)
+                if i == 0:
+                    media.append(InputMediaPhoto(media=photo, caption=text_6h))
+                else:
+                    media.append(InputMediaPhoto(media=photo))
+            await bot.send_media_group(user_id, media)
+        else:
+            await bot.send_message(user_id, text_6h)
+
+        logging.info(f"Follow-up 6h sent to {user_id}")
+    except Exception as e:
+        logging.warning(f"Follow-up 6h failed for {user_id}: {e}")
+
+    # --- Через 12 часов (6 часов после второго) ---
+    await asyncio.sleep(6 * 60 * 60)
+    try:
+        await bot.send_message(
+            user_id,
+            f"🔥 Не забудь воспользоваться промокодом *{PROMO_CODE}* на сайте, "
+            f"чтобы сделать заказ со скидкой — переходи по ссылке 👇",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛒 Заказать со скидкой", url=CATALOG_URL)],
+            ]),
+            parse_mode="Markdown",
+        )
+        logging.info(f"Follow-up 12h sent to {user_id}")
+    except Exception as e:
+        logging.warning(f"Follow-up 12h failed for {user_id}: {e}")
 
 
 # ==================== КАТАЛОГ АРОМАТОВ ====================
@@ -401,13 +475,16 @@ async def process_notes(callback: types.CallbackQuery, state: FSMContext):
         result_text += f"━━━━━━━━━━━━━━━\n\n🎁 *Ваш промокод на скидку 20%:* `{PROMO_CODE}`\n⏰ Действует 24 часа!\n\n"
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Перейти в каталог", url=SITE_URL)],
-            [InlineKeyboardButton(text="📺 Как пользоваться сайтом", url=VIDEO_URL)],
-            [InlineKeyboardButton(text="📱 Наш Telegram-канал", url=TG_CHANNEL)],
+            [InlineKeyboardButton(text="🛒 Перейти в каталог", url=CATALOG_URL)],
+            [InlineKeyboardButton(text="📺 Как пользоваться сайтом", url=HOW_TO_URL)],
             [InlineKeyboardButton(text="🔄 Пройти заново", callback_data="start_quiz")],
         ])
         await callback.message.edit_text(result_text, reply_markup=kb, parse_mode="Markdown")
         await state.clear()
+
+        # Запускаем follow-up цепочку в фоне
+        asyncio.create_task(send_followup_chain(callback.from_user.id))
+
         return
 
     await callback.answer()
