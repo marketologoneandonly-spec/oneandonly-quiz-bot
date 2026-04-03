@@ -8,7 +8,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, FSInputFile
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = "8645459843:AAHPX3bqbSDMDiR17in1r2yjhvS90JmLOcs"
@@ -21,8 +21,12 @@ TG_CHANNEL = "https://t.me/oneandonly_perfumer"
 ADMIN_ID = 77429602
 USERS_FILE = "users.json"
 
-# Папка с фото отзывов
-REVIEWS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reviews")
+# Фото отзывов — file_id из Telegram (заполняется через /getphotoid)
+REVIEW_PHOTO_IDS = [
+    # После получения file_id вставь их сюда, по одному на строку:
+    # "AgACAgIAAxkBAAI...",
+    # "AgACAgIAAxkBAAI...",
+]
 
 
 # ==================== БАЗА ПОЛЬЗОВАТЕЛЕЙ ====================
@@ -85,22 +89,13 @@ async def send_followup_chain(user_id: int):
             "довольных клиентов!\n\nВот некоторые из них 👇"
         )
 
-        # Собираем фото из папки reviews
-        review_files = sorted([
-            os.path.join(REVIEWS_DIR, f)
-            for f in os.listdir(REVIEWS_DIR)
-            if f.endswith((".png", ".jpg", ".jpeg"))
-        ]) if os.path.exists(REVIEWS_DIR) else []
-
-        if review_files:
-            # Telegram позволяет до 10 фото в альбоме
+        if REVIEW_PHOTO_IDS:
             media = []
-            for i, filepath in enumerate(review_files[:10]):
-                photo = FSInputFile(filepath)
+            for i, photo_id in enumerate(REVIEW_PHOTO_IDS[:10]):
                 if i == 0:
-                    media.append(InputMediaPhoto(media=photo, caption=text_6h))
+                    media.append(InputMediaPhoto(media=photo_id, caption=text_6h))
                 else:
-                    media.append(InputMediaPhoto(media=photo))
+                    media.append(InputMediaPhoto(media=photo_id))
             await bot.send_media_group(user_id, media)
         else:
             await bot.send_message(user_id, text_6h)
@@ -369,6 +364,33 @@ async def cmd_users(message: types.Message):
         text += f"• {username} — {date} (×{count})\n"
     text += f"\n📊 Всего в базе: *{len(users)}*"
     await message.answer(text, parse_mode="Markdown")
+
+
+# ==================== ПОЛУЧЕНИЕ FILE_ID ФОТО ====================
+@dp.message(Command("getphotoid"))
+async def cmd_getphotoid(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer(
+        "📸 Отправь мне фото — я верну его file_id.\n"
+        "Когда закончишь — напиши /done"
+    )
+
+
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    # Берём самое большое фото
+    file_id = message.photo[-1].file_id
+    await message.reply(f"✅ file_id:\n\n`{file_id}`", parse_mode="Markdown")
+
+
+@dp.message(Command("done"))
+async def cmd_done(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("👍 Готово! Скопируй все file_id и вставь в REVIEW_PHOTO_IDS в bot.py")
 
 
 # ==================== КВИЗ ====================
