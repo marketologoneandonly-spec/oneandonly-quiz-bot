@@ -378,11 +378,12 @@ async def cmd_getphotoid(message: types.Message):
 
 
 @dp.message(F.photo)
-async def handle_photo(message: types.Message):
+async def handle_photo(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    # Берём самое большое фото
+    await state.clear()
     file_id = message.photo[-1].file_id
+    logging.info(f"Photo file_id from {message.from_user.id}: {file_id}")
     await message.reply(f"✅ file_id:\n\n`{file_id}`", parse_mode="Markdown")
 
 
